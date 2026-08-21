@@ -1,8 +1,8 @@
 import Team from "../models/Team.js";
 import { PROBLEM_STATEMENTS } from "../data/problemStatements.js";
 
-// @desc    Look up a team by registration ID OR leader email and return the
-//          problem statements available for their track, plus current selection
+// @desc    Look up a team by registration ID OR leader/member email and return the
+//          official problem statements available specifically for their track & type
 // @route   GET /api/ps-selection/:identifier
 // @access  Public (visitor-provided team identity)
 export const getTeamSelection = async (req, res) => {
@@ -16,7 +16,6 @@ export const getTeamSelection = async (req, res) => {
     let team = null;
 
     if (isEmail) {
-      // email lookup: leader email OR any member email (shared-mailbox teams)
       const email = identifier.toLowerCase();
       team = await Team.findOne({
         isDeleted: { $ne: true },
@@ -48,12 +47,36 @@ export const getTeamSelection = async (req, res) => {
 
     const eligible = ["PAID", "CASH_PAID", "WAIVED"].includes(team.paymentStatus);
     if (!eligible) {
-      return res.status(403).json({ success: false, message: `Payment status is "${team.paymentStatus}". Only paid teams can select a problem statement.` });
+      return res.status(403).json({
+        success: false,
+        message: `Payment status is "${team.paymentStatus}". Only paid/confirmed teams can select a problem statement.`,
+      });
     }
 
-    const trackProblems = PROBLEM_STATEMENTS.filter((p) => p.track === team.track);
-    const hardwareTrack = trackProblems.length > 0;
-    const participationType = team.participationType || (hardwareTrack ? "hardware" : "software");
+    const teamType = (team.participationType || "software").toLowerCase();
+    
+    // Filter all statements for this team's track
+    const allTrackProblems = PROBLEM_STATEMENTS.filter((p) => p.track === team.track);
+    
+    // Filter by participation type (hardware vs software) if category matches
+    let availableProblems = allTrackProblems.filter((p) => {
+      const pCat = (p.category || "Software").toLowerCase();
+      if (teamType === "hardware") {
+        return pCat === "hardware" || pCat === "dual track";
+      } else {
+        return pCat === "software" || pCat === "dual track";
+      }
+    });
+
+    // Fallback: If no type-specific match exists but track has statements, show track statements
+    if (availableProblems.length === 0 && allTrackProblems.length > 0) {
+      availableProblems = allTrackProblems;
+    }
+
+    const hasStatements = availableProblems.length > 0;
+    const trackNote = hasStatements
+      ? null
+      : `Your team is registered under "${team.track}". This track supports open innovation — you may formulate your own problem statement aligned with this domain.`;
 
     return res.status(200).json({
       success: true,
@@ -63,23 +86,18 @@ export const getTeamSelection = async (req, res) => {
         track: team.track,
         paymentStatus: team.paymentStatus,
         leaderName: team.leader?.name || "Team Leader",
-        participationType,
+        participationType: team.participationType || "software",
       },
-      hardwareTrack,
-      availableProblems: hardwareTrack && participationType === "hardware"
-        ? trackProblems
-        : [],
+      participationType: team.participationType || "software",
+      hasStatements,
+      availableProblems,
       selectedProblem: team.selectedProblemId
         ? {
             problemId: team.selectedProblemId,
             title: team.problemTitle,
           }
         : null,
-      softwareNote: hardwareTrack && participationType === "hardware"
-        ? null
-        : participationType === "software"
-          ? "Software problem statements for your track will be revealed on-spot at the event opening (Aug 22). Check back then!"
-          : "Hardware problem statements for your track are still being finalised — check back soon.",
+      trackNote,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] PS-SELECTION lookup error: ${error.message}`);
@@ -105,14 +123,20 @@ export const selectProblem = async (req, res) => {
     });
 
     if (!team) {
-      return res.status(404).json({ success: false, message: "No team found for this Registration ID. Double-check your ID from the confirmation email." });
+      return res.status(404).json({
+        success: false,
+        message: "No team found for this Registration ID. Double-check your ID from the confirmation email.",
+      });
     }
 
     if (!["PAID", "CASH_PAID", "WAIVED"].includes(team.paymentStatus)) {
-      return res.status(403).json({ success: false, message: `Payment status is "${team.paymentStatus}". Only paid teams can select a problem statement.` });
+      return res.status(403).json({
+        success: false,
+        message: `Payment status is "${team.paymentStatus}". Only paid/confirmed teams can select a problem statement.`,
+      });
     }
 
-    const problem = PROBLEM_STATEMENTS.find((p) => p.id === problemId);
+    const problem = PROBLEM_STATEMENTS.find((p) => p.id.toUpperCase() === problemId);
     if (!problem) {
       return res.status(400).json({ success: false, message: `Unknown problem statement ID "${problemId}".` });
     }
@@ -120,19 +144,19 @@ export const selectProblem = async (req, res) => {
     if (problem.track !== team.track) {
       return res.status(400).json({
         success: false,
-        message: `"${problemId}" belongs to the ${problem.track} track, but your team is registered under ${team.track}. Choose a statement from your own track.`,
+        message: `"${problemId}" belongs to the "${problem.track}" track, but your team is registered under "${team.track}". Choose a statement from your registered track.`,
       });
     }
 
     team.problemTitle = problem.title;
-    team.problemAbstract = problem.title; // keep abstract aligned; evaluator/admin use title for display
+    team.problemAbstract = problem.title;
     team.selectedProblemId = problem.id;
     team.selectedAt = new Date();
     await team.save();
 
     return res.status(200).json({
       success: true,
-      message: `Selected "${problem.title}" for ${team.teamName}.`,
+      message: `Successfully selected "${problem.id} — ${problem.title}" for ${team.teamName}.`,
       team: {
         teamName: team.teamName,
         registrationId: team.registrationId,
