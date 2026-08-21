@@ -76,6 +76,16 @@ const teamSchema = new mongoose.Schema(
       required: [true, "Problem abstract is required"],
       trim: true,
     },
+    selectedProblemId: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+    },
+    selectedAt: {
+      type: Date,
+      default: null,
+    },
     referralCode: {
       type: String,
       default: "",
@@ -92,6 +102,12 @@ const teamSchema = new mongoose.Schema(
       type: String,
       enum: ["UNPAID", "PAID", "WAIVED", "CASH_PAID"],
       default: "UNPAID",
+      index: true,
+    },
+    participationType: {
+      type: String,
+      enum: ["hardware", "software"],
+      default: "software",
       index: true,
     },
     isDeleted: {
